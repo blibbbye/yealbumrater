@@ -34,6 +34,8 @@ button:focus-visible,select:focus-visible{outline:2px solid #fff;outline-offset:
 .rate{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .rate button{padding:7px 8px;border-radius:8px;font-size:12px;min-width:31px}
 .rate button.active{background:var(--good);color:#000;border-color:var(--good);font-weight:800}
+.unrate-button{padding:7px 9px;border-radius:8px;font-size:14px;min-width:31px;color:#aaa}
+.unrate-button:hover{color:#fff;border-color:#555}
 .statrow{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid #222}
 .statrow span:first-child{color:#999}
 .bar{height:8px;background:#242424;border-radius:99px;overflow:hidden;margin:7px 0 14px}
@@ -371,17 +373,31 @@ function render(){
       return '<button type="button" class="rate-button ' + (rating === value ? "active" : "") +
         '" data-track-index="' + index + '" data-rating="' + value + '">' + value + '</button>';
     }).join("");
+    const unrateButton = rating
+      ? '<button type="button" class="unrate-button" data-track-index="' + index + '" aria-label="Set unrated">×</button>'
+      : '';
+
     return '<div class="track">' +
       '<div class="num">' + String(index+1).padStart(2,"0") + '</div>' +
       '<div><div class="title">' + esc(track) + '</div>' +
       '<div class="status">' + (rating ? "Rated " + rating + "/10" : "Not rated") + '</div></div>' +
-      '<div class="rate">' + buttons + '</div>' +
+      '<div class="rate">' + buttons + unrateButton + '</div>' +
     '</div>';
   }).join("");
 
   document.querySelectorAll(".rate-button").forEach(function(button){
     button.addEventListener("click",function(){
       rateTrack(Number(button.dataset.trackIndex),Number(button.dataset.rating));
+    });
+  });
+  document.querySelectorAll(".unrate-button").forEach(function(button){
+    button.addEventListener("click",function(){
+      const album = albums[current];
+      const track = album && album.tracks[Number(button.dataset.trackIndex)];
+      if(!album || !track) return;
+      delete ratings[key(album.name,track)];
+      saveRatings();
+      render();
     });
   });
 
