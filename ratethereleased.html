@@ -21,6 +21,14 @@ button{cursor:pointer}button:hover{background:#222}.primary{background:#fff;colo
 .mini{font-size:12px;color:#888;line-height:1.5}.pill{display:inline-block;border:1px solid #333;border-radius:99px;padding:5px 8px;margin:3px 3px 0 0;color:#bbb}
 .empty{padding:35px 10px;text-align:center;color:#777}.sticky{position:sticky;top:16px}
 @media(max-width:900px){.grid{grid-template-columns:1fr}.sticky{position:static}.score{text-align:left}.albumhead{display:block}}
+
+.recap-panel{display:none;margin-top:18px}
+.recap-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.recap-card{background:#151515;border:1px solid #2b2b2b;border-radius:16px;padding:16px}
+.recap-card h3{margin:0 0 8px;font-size:18px}
+.recap-list{margin:0;padding-left:24px;color:#ddd}.recap-list li{padding:4px 0}
+.recap-muted{color:#777}.recap-stat{font-size:28px;font-weight:800}.save-status{font-size:12px;color:#888;align-self:center}
+@media(max-width:800px){.recap-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -33,13 +41,10 @@ button{cursor:pointer}button:hover{background:#222}.primary{background:#fff;colo
   <div class="toolbar">
     <select id="albumSelect" aria-label="Choose album"></select>
     <button onclick="resetAlbum()">Reset current album</button>
-    <button class="primary" onclick="downloadStats()">Download stats image</button>
+    <button class="primary" onclick="downloadStats()">Download stats image</button><button onclick="showRecap()">Recap</button><button onclick="backupRatings()">Backup</button><button onclick="restoreRatings()">Restore</button><button onclick="clearAllRatings()">Clear all</button><span id="saveStatus" class="save-status">Saved locally</span>
   </div>
   <div class="grid">
-    <main class="panel">
-      <div id="albumHead"></div>
-      <div id="tracks"></div>
-    </main>
+    <main id="albumPanel" class="panel"><div id="albumHead"></div><div id="tracks"></div></main><section id="recapPanel" class="panel recap-panel"></section>
     <aside class="panel sticky">
       <div class="eyebrow">YOUR STATS</div>
       <h2 id="statTitle" style="margin:8px 0 4px">—</h2>
@@ -58,136 +63,136 @@ const albums = [{"name":"The College Dropout","year":"2004","note":"Released stu
 
 let current = 0;
 
-const STORAGE_KEY = "yeRatings1";
 
-function loadRatings() {
-  try {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
+const MODE = document.querySelector("h1") && document.querySelector("h1").innerText.includes("UNRELEASED") ? "unreleased" : "released";
+const STORAGE_KEY = "yeAlbumRater:" + MODE + ":v3";
+const LEGACY_KEY = "yeRatings1";
 
-    if (!saved) {
-      return {};
-    }
-
-    const parsed = JSON.parse(saved);
-
-    if (parsed && typeof parsed === "object") {
-      return parsed;
-    }
-
-    return {};
-  } catch (error) {
-    console.warn("Could not load ratings:", error);
-    return {};
+function loadRatings(){
+  for(const sk of [STORAGE_KEY,LEGACY_KEY]){
+    try{
+      const raw=localStorage.getItem(sk);
+      if(!raw) continue;
+      const parsed=JSON.parse(raw);
+      const data=parsed && parsed.ratings && typeof parsed.ratings==="object" ? parsed.ratings : parsed;
+      if(data && typeof data==="object" && !Array.isArray(data)){
+        if(sk===LEGACY_KEY && !localStorage.getItem(STORAGE_KEY)) localStorage.setItem(STORAGE_KEY,JSON.stringify(data));
+        return data;
+      }
+    }catch(e){console.warn("Could not load ratings",e)}
   }
+  return {};
 }
+let ratings=loadRatings();
+let viewMode="album";
+let recapLimit=3;
 
-let ratings = loadRatings();
-
-const $ = id => document.getElementById(id);
-
-function key(a, t) {
-  return a + "::" + t;
-}
-
-function save() {
-  try {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(ratings)
-    );
-
-    // Verify that the save actually worked
-    const check = window.localStorage.getItem(STORAGE_KEY);
-
-    if (check === null) {
-      console.warn("Ratings were NOT saved.");
-      return false;
-    }
-
+const $=id=>document.getElementById(id);
+function key(a,t){return a+"::"+t}
+function avg(v){return v.length?v.reduce((a,b)=>a+b,0)/v.length:0}
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+function save(){
+  try{
+    const raw=JSON.stringify(ratings);
+    localStorage.setItem(STORAGE_KEY,raw);
+    if(localStorage.getItem(STORAGE_KEY)!==raw) throw new Error("verification failed");
+    updateSaveStatus("Saved locally");
     return true;
-  } catch (error) {
-    console.warn("Could not save ratings:", error);
+  }catch(e){
+    console.warn("Save failed",e);
+    updateSaveStatus("Save failed — use Backup");
     return false;
   }
 }
-function avg(vals){return vals.length?(vals.reduce((a,b)=>a+b,0)/vals.length):0}
-function render(){
-  const a=albums[current]; $("albumSelect").value=current;
-  $("albumHead").innerHTML=`<div class="albumhead"><div><div class="eyebrow">${a.year}</div><h2>${a.name}</h2><div class="meta">${a.note}</div></div><div class="score">${albumScore(a).toFixed(1)}<small>album rating</small></div></div>`;
-  $("tracks").innerHTML=a.tracks.map((t,i)=>{
-    const r=ratings[key(a.name,t)]||0;
-    return `<div class="track"><div class="num">${String(i+1).padStart(2,"0")}</div><div><div class="title">${esc(t)}</div><div class="status">${r?`Rated ${r}/10`:"Not rated"}</div></div><div class="rate">${[1,2,3,4,5,6,7,8,9,10].map(n=>`<button class="${r===n?'active':''}" onclick="rate(${i},${n})">${n}</button>`).join("")}</div></div>`;
-  }).join("");
-  renderStats(a); renderAllAlbums();
+function updateSaveStatus(t){const e=$("saveStatus");if(e)e.textContent=t}
+function backupRatings(){
+  const data={version:3,mode:MODE,savedAt:new Date().toISOString(),ratings:ratings};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.download="ye-"+MODE+"-ratings-backup.json";a.href=URL.createObjectURL(blob);a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function restoreRatings(){
+  const input=document.createElement("input");input.type="file";input.accept=".json,application/json";
+  input.onchange=async()=>{
+    const file=input.files&&input.files[0];if(!file)return;
+    try{
+      const data=JSON.parse(await file.text());
+      const incoming=data&&data.ratings&&typeof data.ratings==="object"?data.ratings:data;
+      if(!incoming||typeof incoming!=="object"||Array.isArray(incoming))throw new Error("Invalid backup");
+      ratings=incoming;if(!save())throw new Error("Storage unavailable");
+      render();alert("Ratings restored.");
+    }catch(e){alert("Could not restore backup: "+e.message)}
+  };
+  input.click();
+}
+function clearAllRatings(){
+  if(!confirm("Delete ALL ratings for this rater?"))return;
+  ratings={};save();render();
 }
 function albumScore(a){return avg(a.tracks.map(t=>ratings[key(a.name,t)]||0).filter(Boolean))}
+function ratedCount(a){return a.tracks.filter(t=>ratings[key(a.name,t)]).length}
+function ratedSongs(){
+  return albums.flatMap(a=>a.tracks.map((t,i)=>({album:a.name,title:t,r:ratings[key(a.name,t)]||0,index:i}))).filter(x=>x.r>0);
+}
+function topSongs(a,n){
+  const list=a.tracks.map((t,i)=>({title:t,r:ratings[key(a.name,t)]||0,index:i})).filter(x=>x.r);
+  list.sort((a,b)=>b.r-a.r||a.index-b.index);
+  return n==="all"?list:list.slice(0,Number(n));
+}
+function showRecap(){viewMode="recap";render()}
+function showAlbum(){viewMode="album";render()}
+function render(){
+  const a=albums[current];$("albumSelect").value=current;
+  if(viewMode==="recap"){
+    $("albumPanel").style.display="none";$("recapPanel").style.display="block";renderRecap();return;
+  }
+  $("albumPanel").style.display="block";$("recapPanel").style.display="none";
+  $("albumHead").innerHTML='<div class="albumhead"><div><div class="eyebrow">'+esc(a.year)+'</div><h2>'+esc(a.name)+'</h2><div class="meta">'+esc(a.note)+'</div></div><div class="score">'+albumScore(a).toFixed(1)+'<small>album rating</small></div></div>';
+  $("tracks").innerHTML=a.tracks.map((t,i)=>{
+    const r=ratings[key(a.name,t)]||0;
+    return '<div class="track"><div class="num">'+String(i+1).padStart(2,"0")+'</div><div><div class="title">'+esc(t)+'</div><div class="status">'+(r?"Rated "+r+"/10":"Not rated")+'</div></div><div class="rate">'+[1,2,3,4,5,6,7,8,9,10].map(n=>'<button class="'+(r===n?"active":"")+'" onclick="rate('+i+','+n+')">'+n+'</button>').join("")+'</div></div>';
+  }).join("");
+  renderStats(a);renderAllAlbums();updateSaveStatus("Saved locally");
+}
 function rate(i,n){ratings[key(albums[current].name,albums[current].tracks[i])]=n;save();render()}
 function resetAlbum(){const a=albums[current];a.tracks.forEach(t=>delete ratings[key(a.name,t)]);save();render()}
 function renderStats(a){
-  const vals=a.tracks.map(t=>ratings[key(a.name,t)]||0).filter(Boolean), score=avg(vals), best=vals.length?Math.max(...vals):0, worst=vals.length?Math.min(...vals):0;
+  const vals=a.tracks.map(t=>ratings[key(a.name,t)]||0).filter(Boolean),score=avg(vals),best=vals.length?Math.max(...vals):0,worst=vals.length?Math.min(...vals):0;
   $("statTitle").textContent=a.name;
-  $("stats").innerHTML=`
-  <div class="statrow"><span>Album rating</span><strong>${score?score.toFixed(2):"—"}/10</strong></div>
-  <div class="statrow"><span>Rated</span><strong>${vals.length}/${a.tracks.length}</strong></div>
-  <div class="statrow"><span>Highest</span><strong>${best?best+"/10":"—"}</strong></div>
-  <div class="statrow"><span>Lowest</span><strong>${worst?worst+"/10":"—"}</strong></div>
-  <div style="margin-top:14px;color:#aaa;font-size:12px">Completion</div><div class="bar"><i style="width:${vals.length/a.tracks.length*100}%"></i></div>`;
+  $("stats").innerHTML='<div class="statrow"><span>Album rating</span><strong>'+(score?score.toFixed(2):"—")+'/10</strong></div><div class="statrow"><span>Rated</span><strong>'+vals.length+'/'+a.tracks.length+'</strong></div><div class="statrow"><span>Highest</span><strong>'+(best?best+"/10":"—")+'</strong></div><div class="statrow"><span>Lowest</span><strong>'+(worst?worst+"/10":"—")+'</strong></div><div style="margin-top:14px;color:#aaa;font-size:12px">Completion</div><div class="bar"><i style="width:'+(vals.length/a.tracks.length*100)+'%"></i></div>';
 }
 function renderAllAlbums(){
-  const html=albums.map((a,i)=>{const s=albumScore(a);return `<span class="pill">${esc(a.name)} ${s?s.toFixed(1):"—"}</span>`}).join("");
-  $("allAlbums").innerHTML=`<div class="eyebrow" style="margin-top:22px">ALL UR ALBUM SCORES</div><div style="margin-top:6px">${html}</div>`;
+  $("allAlbums").innerHTML='<div class="eyebrow" style="margin-top:22px">ALL UR ALBUM SCORES</div><div style="margin-top:6px">'+albums.map(a=>{const s=albumScore(a);return '<span class="pill">'+esc(a.name)+' '+(s?s.toFixed(1):"—")+'</span>'}).join("")+'</div>';
 }
-function esc(s){return s.replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+function renderRecap(){
+  const songs=ratedSongs(),ratedAlbums=albums.filter(a=>ratedCount(a)>0),stats=ratedAlbums.map(a=>({a:a,score:albumScore(a),count:ratedCount(a)})).sort((a,b)=>b.score-a.score||b.count-a.count);
+  const favorite=stats[0],topSong=[...songs].sort((a,b)=>b.r-a.r||a.index-b.index)[0],overall=avg(songs.map(s=>s.r)),tens=songs.filter(s=>s.r===10).length;
+  const cards=albums.map(a=>{
+    const list=topSongs(a,recapLimit);
+    return '<div class="recap-card"><h3>'+esc(a.name)+'</h3>'+(list.length?'<ol class="recap-list">'+list.map(s=>'<li><strong>'+esc(s.title)+'</strong> — '+s.r+'/10</li>').join("")+'</ol>':'<div class="recap-muted">No rated songs yet.</div>')+'</div>';
+  }).join("");
+  $("recapPanel").innerHTML='<div class="eyebrow">YOUR COMPLETE RECAP</div><h2 style="margin:8px 0 18px">Rating recap</h2><div class="toolbar"><select id="recapLimit"><option value="1">Top 1</option><option value="2">Top 2</option><option value="3">Top 3</option><option value="4">Top 4</option><option value="5">Top 5</option><option value="10">Top 10</option><option value="all">Everything</option></select><button class="primary" onclick="downloadRecapImage()">Download all albums + top 3 image</button><button onclick="showAlbum()">Back to albums</button></div><div class="recap-grid"><div class="recap-card"><div class="recap-muted">Favorite album</div><div class="recap-stat">'+(favorite?esc(favorite.a.name):"—")+'</div><div class="recap-muted">'+(favorite?favorite.score.toFixed(2)+"/10":"")+'</div></div><div class="recap-card"><div class="recap-muted">Favorite song</div><div class="recap-stat">'+(topSong?esc(topSong.title):"—")+'</div><div class="recap-muted">'+(topSong?topSong.r+"/10 • "+esc(topSong.album):"")+'</div></div><div class="recap-card"><div class="recap-muted">Overall average</div><div class="recap-stat">'+(overall?overall.toFixed(2):"—")+'/10</div><div class="recap-muted">'+songs.length+" songs • "+ratedAlbums.length+"/"+albums.length+" albums</div></div><div class="recap-card"><div class="recap-muted">Perfect 10s</div><div class="recap-stat">'+tens+'</div><div class="recap-muted">songs rated 10/10</div></div></div><div class="eyebrow" style="margin-top:20px">TOP SONGS PER ALBUM</div><div class="recap-grid" style="margin-top:8px">'+cards+'</div>';
+  $("recapLimit").value=recapLimit;
+  $("recapLimit").onchange=e=>{recapLimit=e.target.value;renderRecap()};
+}
 function downloadStats(){
-  const a=albums[current];
-  const songs=a.tracks.map((t,i)=>({title:t,r:ratings[key(a.name,t)]||0,i})).filter(o=>o.r);
-  const W=1600, titleH=300, rowH=64, H=Math.max(720,titleH+songs.length*rowH+130);
-  const c=document.createElement("canvas"); c.width=W; c.height=H;
-  const x=c.getContext("2d");
-
-  x.fillStyle="#090909"; x.fillRect(0,0,W,H);
-
-  x.fillStyle="#f4f4f4";
-  x.font="800 64px Arial";
-  x.fillText("YOUR RATING ON",70,85);
-  x.fillText("THE ALBUM",70,155);
-
-  x.font="800 40px Arial";
-  x.fillText(a.name,70,220);
-
-  const score=avg(songs.map(s=>s.r));
-  x.fillStyle="#aaa";
-  x.font="20px Arial";
-  x.fillText(`${songs.length}/${a.tracks.length} songs rated`,70,258);
-  x.fillText(`Album rating: ${score?score.toFixed(2):"—"}/10`,400,258);
-
-  songs.forEach((s,index)=>{
-    const y=titleH+index*rowH;
-    x.fillStyle="#181818";
-    x.fillRect(55,y,W-110,48);
-
-    x.fillStyle="#666";
-    x.font="17px Arial";
-    x.fillText(String(s.i+1).padStart(2,"0"),78,y+31);
-
-    x.fillStyle="#f4f4f4";
-    x.font="600 21px Arial";
-    x.fillText(s.title,135,y+31);
-
-    x.fillStyle="#d9ff61";
-    x.font="800 22px Arial";
-    x.fillText(`${s.r}/10`,W-150,y+31);
-  });
-
-  x.fillStyle="#777";
-  x.font="20px Arial";
-  x.fillText("Tool made by @blibbye and @modmodroots",70,H-42);
-
-  const link=document.createElement("a");
-  link.download=`${a.name.replace(/[^a-z0-9]+/gi,"_")}_stats.png`;
-  link.href=c.toDataURL("image/png");
-  link.click();
+  const a=albums[current],songs=a.tracks.map((t,i)=>({title:t,r:ratings[key(a.name,t)]||0,i})).filter(o=>o.r),W=1600,titleH=300,rowH=64,H=Math.max(720,titleH+songs.length*rowH+130);
+  const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");
+  x.fillStyle="#090909";x.fillRect(0,0,W,H);x.fillStyle="#f4f4f4";x.font="800 64px Arial";x.fillText("YOUR RATING ON",70,85);x.fillText("THE ALBUM",70,155);x.font="800 40px Arial";x.fillText(a.name,70,220);
+  const score=avg(songs.map(s=>s.r));x.fillStyle="#aaa";x.font="20px Arial";x.fillText(songs.length+"/"+a.tracks.length+" songs rated",70,258);x.fillText("Album rating: "+(score?score.toFixed(2):"—")+"/10",400,258);
+  songs.forEach((s,index)=>{const y=titleH+index*rowH;x.fillStyle="#181818";x.fillRect(55,y,W-110,48);x.fillStyle="#666";x.font="17px Arial";x.fillText(String(s.i+1).padStart(2,"0"),78,y+31);x.fillStyle="#f4f4f4";x.font="600 21px Arial";x.fillText(s.title,135,y+31);x.fillStyle="#d9ff61";x.font="800 22px Arial";x.fillText(s.r+"/10",W-150,y+31)});
+  x.fillStyle="#777";x.font="20px Arial";x.fillText("Tool made by @blibbye and @modmodroots",70,H-42);
+  const link=document.createElement("a");link.download=a.name.replace(/[^a-z0-9]+/gi,"_")+"_stats.png";link.href=c.toDataURL("image/png");link.click();
 }
+function downloadRecapImage(){
+  const W=1800,rowH=128,pad=70,H=260+albums.length*rowH+100,c=document.createElement("canvas");c.width=W;c.height=H,x=c.getContext("2d");
+  x.fillStyle="#090909";x.fillRect(0,0,W,H);x.fillStyle="#f4f4f4";x.font="800 58px Arial";x.fillText(MODE==="released"?"RATE THE ALBUMS":"RATE THE UNRELEASED ALBUMS",pad,82);x.fillStyle="#aaa";x.font="22px Arial";x.fillText("YOUR ALBUM RECAP • TOP 3 SONGS",pad,122);
+  const all=ratedSongs(),overall=avg(all.map(s=>s.r));x.fillText("Overall: "+(overall?overall.toFixed(2):"—")+"/10 • "+all.length+" songs rated",pad,160);
+  albums.forEach((a,i)=>{const y=210+i*rowH,s=albumScore(a),list=topSongs(a,3);x.fillStyle="#181818";x.fillRect(pad,y,W-pad*2,100);x.fillStyle="#f4f4f4";x.font="700 25px Arial";x.fillText(a.name,pad+22,y+34);x.fillStyle="#d9ff61";x.font="800 23px Arial";x.fillText(s?s.toFixed(2)+"/10":"—",W-pad-150,y+34);x.fillStyle="#bbb";x.font="18px Arial";x.fillText(list.length?list.map((q,j)=>(j+1)+". "+q.title+" — "+q.r+"/10").join(" • "):"No rated songs",pad+22,y+72)});
+  x.fillStyle="#777";x.font="19px Arial";x.fillText("@modmodroots • @blibbye",pad,H-38);
+  const link=document.createElement("a");link.download="ye_"+MODE+"_recap_top3.png";link.href=c.toDataURL("image/png");link.click();
+}
+
 $("albumSelect").innerHTML=albums.map((a,i)=>`<option value="${i}">${a.name}</option>`).join("");
 $("albumSelect").onchange=e=>{current=+e.target.value;render()};
 render();
